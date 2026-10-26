@@ -4,11 +4,22 @@
 
 ![vuln-priority-engine](assets/hero.png)
 
-## The problem
+[![CI](https://github.com/SlateGitOrg/vuln-priority-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/SlateGitOrg/vuln-priority-engine/actions/workflows/ci.yml)
 
-Security scanners (Trivy, Nessus, Qualys, ...) hand engineering teams thousands of CVEs a week, usually sorted by CVSS severity alone. That's a bad prioritization signal in practice: CVSS measures theoretical worst-case impact, not the probability a flaw actually gets exploited. The result is entirely predictable — teams burn weeks patching "High" CVEs that nobody has ever weaponized, while a handful of CVEs with active, real-world exploitation sit in the backlog for months because they happened to score "Medium."
+## Why
 
-`vuln-priority-engine` closes that gap. It ingests raw scanner output, enriches every CVE with **EPSS** (exploit probability), **CISA KEV** (confirmed active exploitation), and **asset criticality** (how much this specific host/image actually matters), and produces one ranked queue with a concrete SLA per finding.
+Security scanners (Trivy, Nessus, Qualys, ...) hand engineering teams thousands of CVEs a week, usually sorted by CVSS severity alone. CVSS measures theoretical worst-case impact, not the probability that a flaw gets exploited. Teams end up patching "High" CVEs nobody has weaponized while a few actively exploited CVEs that scored "Medium" sit in the backlog for months.
+
+`vuln-priority-engine` ingests raw scanner output, enriches every CVE with **EPSS** (exploit probability), **CISA KEV** (confirmed active exploitation) and **asset criticality**, and produces one ranked queue with a concrete SLA per finding.
+
+## Features
+
+- Adapters for Trivy JSON reports and generic CVE CSV exports, normalized to one model
+- Offline enrichment from bundled EPSS, CISA KEV and asset-criticality data, with opt-in live feed fetchers
+- Weighted, fully configurable risk score (0-100) driven by `policy.yaml`
+- Priority buckets with SLAs, plus a KEV override that forces actively exploited CVEs into `critical`
+- Idempotent storage in SQLite (Postgres via `DATABASE_URL`) and a FastAPI service with filtering and ad-hoc scoring
+- Per-finding score breakdown so every ranking can be explained
 
 ## Architecture
 
@@ -22,11 +33,12 @@ flowchart LR
 
 ## Quick start
 
-Requires Python 3.11+. Everything runs fully offline against bundled sample data — no API keys, no external services.
+Requires Python 3.11+ (CI runs 3.11 and 3.12). Everything runs offline against bundled sample data, with no API keys or external services.
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/SlateGitOrg/vuln-priority-engine.git
 cd vuln-priority-engine
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # Run the test suite (68 tests)
@@ -57,7 +69,39 @@ docker build -t vuln-priority-engine .
 docker run -p 8000:8000 vuln-priority-engine
 ```
 
-Interactive API docs (Swagger UI) are auto-generated at `http://localhost:8000/docs`.
+Interactive API docs (Swagger UI) are served at `http://localhost:8000/docs`.
+
+### Example output
+
+`POST /ingest/sample` loads the bundled fixtures:
+
+```json
+{"ingested": 10, "source": "sample"}
+```
+
+`GET /vulns` returns findings ranked by `risk_score` (first entry, trimmed):
+
+```json
+{
+  "cve_id": "CVE-2021-44228",
+  "asset_id": "web-prod-03",
+  "package": "log4j",
+  "cvss_score": 10.0,
+  "epss_score": 0.97399,
+  "kev_listed": true,
+  "asset_criticality": "high",
+  "risk_score": 96.59,
+  "priority_bucket": "critical",
+  "sla_days": 7,
+  "score_breakdown": {
+    "weighted_cvss": 35.0,
+    "weighted_epss": 34.09,
+    "weighted_kev": 20.0,
+    "weighted_asset": 7.5,
+    "kev_escalated": false
+  }
+}
+```
 
 ## How it works
 
@@ -110,7 +154,7 @@ Default weights (`policy.yaml`): `cvss=0.35, epss=0.35, kev=0.20, asset_critical
 | medium | risk_score >= 40 | 90 days |
 | low | risk_score >= 0 | 180 days |
 
-**KEV override:** if `force_critical_on_kev: true` (the default), any CVE listed in CISA KEV is force-escalated to the `critical` bucket regardless of its computed score — an actively-exploited CVE is a fire drill even on a low-criticality asset, because attackers scanning the internet for it don't care about your asset inventory. This is exactly the "reframe the flat CVE list" behavior the project sets out to fix: `policy.yaml` is the one place that defines what "critical" means, and it's meant to be retuned per organization without touching code.
+**KEV override:** if `force_critical_on_kev: true` (the default), any CVE listed in CISA KEV is force-escalated to the `critical` bucket regardless of its computed score — an actively-exploited CVE is a fire drill even on a low-criticality asset, because attackers scanning the internet for it don't care about your asset inventory. `policy.yaml` is the one place that defines what "critical" means, and it can be retuned per organization without touching code.
 
 ### 4. Storage & API (`app/db.py`, `app/main.py`)
 
@@ -144,12 +188,16 @@ app/
   main.py               FastAPI app wiring it all together
 data/                  Bundled offline sample fixtures (Trivy report, CVE CSV, EPSS, KEV, asset tiers)
 policy.yaml            The tunable "what counts as critical" config
-tests/                 68 pytest tests
+tests/                 pytest suite (68 tests)
 ```
 
-## Scope & honest limits
+## Limitations
 
-This is a solo-scale prototype, not an enterprise vulnerability-management platform: no auth/RBAC, no live feed scheduler (fetchers are provided but opt-in), no dedupe across scan runs beyond the deterministic finding key, and only two ingest formats. It's deliberately sized to demonstrate the real, hard part of the problem — a defensible, configurable, tested risk-scoring pipeline — rather than build out every integration a production SOC would eventually want.
+- No authentication or RBAC on the API
+- No scheduler for the live EPSS/KEV fetchers; they are provided but opt-in
+- No deduplication across scan runs beyond the deterministic finding key
+- Only two ingest formats (Trivy JSON, generic CSV)
+- Bundled EPSS/KEV/asset data is a small sample set, not a current feed
 
 ## License
 
