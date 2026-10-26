@@ -25,10 +25,10 @@ Security scanners (Trivy, Nessus, Qualys, ...) hand engineering teams thousands 
 
 ```mermaid
 flowchart LR
-    A[Scanner adapters<br/>Trivy JSON, Nmap/CSV] --> B[CVE normalization]
+    A[Scanner adapters<br/>Trivy JSON, generic CSV] --> B[CVE normalization]
     B --> C[Enrichment<br/>EPSS + CISA KEV + asset criticality]
     C --> D[Configurable risk-scoring engine]
-    D --> E[Prioritized remediation queue<br/>with SLA tracking]
+    D --> E[Prioritized remediation queue<br/>with per-finding SLA]
 ```
 
 ## Quick start
@@ -158,7 +158,7 @@ Default weights (`policy.yaml`): `cvss=0.35, epss=0.35, kev=0.20, asset_critical
 
 ### 4. Storage & API (`app/db.py`, `app/main.py`)
 
-Findings are upserted (by a deterministic `asset_id::cve_id::package` key) into SQLite via SQLAlchemy. Because everything goes through the ORM rather than raw SQLite SQL, pointing the `DATABASE_URL` environment variable at a Postgres DSN (e.g. `postgresql+psycopg2://user:pass@host/db`) works without any code changes.
+Findings are upserted (by a deterministic `asset_id::cve_id::package` key) into SQLite via SQLAlchemy. Because everything goes through the ORM rather than raw SQLite SQL, pointing the `DATABASE_URL` environment variable at a Postgres DSN (e.g. `postgresql+psycopg2://user:pass@host/db`) works without any code changes once the driver is installed (`pip install psycopg2-binary`; it is not in `requirements.txt`).
 
 - `POST /ingest/sample` — load the bundled Trivy + CSV fixtures (fastest way to see it work)
 - `POST /ingest/trivy` — upload a Trivy JSON report
